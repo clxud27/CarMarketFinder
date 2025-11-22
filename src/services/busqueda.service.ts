@@ -9,18 +9,15 @@ export const buscarRepuestos = async (
   console.log(`🔎 Buscando: ${pieza} ${modelo}`);
 
   try {
-    // Verificar caché primero
     const cached = getSearch({ pieza, modeloAuto: modelo });
     if (cached) {
       console.log('⚡ Resultados desde caché');
       return { repuestos: cached.repuestos, fromCache: true };
     }
 
-    // Buscar usando la API de Vercel Functions (backend)
     console.log('🌐 Buscando en múltiples tiendas vía API...');
     const resultados = await searchRepuestosApi(pieza, modelo);
 
-    // Guardar búsqueda en caché e historial
     if (resultados.length > 0) {
       console.log('💾 Guardando búsqueda en historial...');
       saveSearch({ pieza, modeloAuto: modelo }, resultados);

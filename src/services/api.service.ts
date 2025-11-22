@@ -2,16 +2,11 @@ import type { Repuesto } from '../types';
 
 /**
  * URL base de la API
- * En desarrollo: usa localhost
- * En producción: usa tu dominio de Vercel
  */
 const getApiUrl = (): string => {
-  // Si está en producción (Vercel), usa la URL del dominio actual
   if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
     return window.location.origin;
   }
-  // En desarrollo, usa la API de Vercel en producción o localhost
-  // Por ahora retornamos la URL actual para que funcione tanto local como en Vercel
   return typeof window !== 'undefined' ? window.location.origin : '';
 };
 
@@ -69,17 +64,12 @@ export const searchRepuestosApi = async (
   }
 };
 
-/**
- * Versión alternativa usando GET (para compatibilidad con algunas apps)
- */
 export const searchRepuestosApiGet = async (
   pieza: string,
   modelo: string
 ): Promise<Repuesto[]> => {
   try {
     const apiUrl = `${getApiUrl()}/api/search?pieza=${encodeURIComponent(pieza)}&modelo=${encodeURIComponent(modelo)}`;
-
-    console.log(`🌐 Llamando a API (GET): ${apiUrl}`);
 
     const response = await fetch(apiUrl, {
       method: 'GET',
@@ -98,8 +88,6 @@ export const searchRepuestosApiGet = async (
     if (!data.success) {
       throw new Error(data.error || 'Error desconocido en la API');
     }
-
-    console.log(`✅ API respondió con ${data.count} resultados`);
 
     return data.results;
 

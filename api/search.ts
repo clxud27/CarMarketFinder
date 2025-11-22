@@ -19,6 +19,22 @@ interface Repuesto {
   fechaScraped: Date;
 }
 
+// Tipos para la respuesta de MercadoLibre API
+interface MercadoLibreItem {
+  id: string;
+  title: string;
+  price: number;
+  thumbnail?: string;
+  permalink: string;
+  seller?: {
+    nickname?: string;
+  };
+}
+
+interface MercadoLibreResponse {
+  results: MercadoLibreItem[];
+}
+
 /**
  * Busca en MercadoLibre Chile
  */
@@ -41,7 +57,7 @@ const searchMercadoLibre = async (pieza: string, modelo: string): Promise<Repues
       throw new Error(`MercadoLibre API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as MercadoLibreResponse;
 
     if (!data.results || data.results.length === 0) {
       console.log('⚠️ MercadoLibre: Sin resultados');
@@ -50,7 +66,7 @@ const searchMercadoLibre = async (pieza: string, modelo: string): Promise<Repues
 
     console.log(`✅ MercadoLibre: ${data.results.length} productos encontrados`);
 
-    return data.results.map((item: any) => ({
+    return data.results.map((item) => ({
       id: `ml-${item.id}`,
       nombre: item.title,
       precio: item.price,
@@ -63,8 +79,9 @@ const searchMercadoLibre = async (pieza: string, modelo: string): Promise<Repues
       categoria: 'Otros',
       fechaScraped: new Date(),
     }));
-  } catch (error: any) {
-    console.error('❌ Error en MercadoLibre:', error.message);
+  } catch (error) {
+    const err = error as Error;
+    console.error('❌ Error en MercadoLibre:', err.message);
     return [];
   }
 };
@@ -91,7 +108,7 @@ const searchYapo = async (pieza: string, modelo: string): Promise<Repuesto[]> =>
       throw new Error(`Yapo API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await response.json() as MercadoLibreResponse;
 
     if (!data.results || data.results.length === 0) {
       console.log('⚠️ Yapo: Sin resultados');
@@ -100,7 +117,7 @@ const searchYapo = async (pieza: string, modelo: string): Promise<Repuesto[]> =>
 
     console.log(`✅ Yapo: ${data.results.length} productos encontrados`);
 
-    return data.results.slice(0, 15).map((item: any) => ({
+    return data.results.slice(0, 15).map((item) => ({
       id: `yapo-${item.id}`,
       nombre: item.title,
       precio: item.price,
@@ -113,8 +130,9 @@ const searchYapo = async (pieza: string, modelo: string): Promise<Repuesto[]> =>
       categoria: 'Otros',
       fechaScraped: new Date(),
     }));
-  } catch (error: any) {
-    console.error('❌ Error en Yapo:', error.message);
+  } catch (error) {
+    const err = error as Error;
+    console.error('❌ Error en Yapo:', err.message);
     return [];
   }
 };
@@ -201,10 +219,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       results: allResults,
     });
 
-  } catch (error: any) {
-    console.error('❌ Error en API:', error);
+  } catch (error) {
+    const err = error as Error;
+    console.error('❌ Error en API:', err);
     return res.status(500).json({
-      error: error.message || 'Error interno del servidor',
+      error: err.message || 'Error interno del servidor',
       success: false,
     });
   }
