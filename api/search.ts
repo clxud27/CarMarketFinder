@@ -1,128 +1,82 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-interface SearchParams {
-  pieza: string;
-  modelo: string;
-}
+// ... (Las interfaces SearchParams, Repuesto, etc. déjalas igual, no cambian) ...
+interface SearchParams { pieza: string; modelo: string; }
+interface Repuesto { id: string; nombre: string; precio: number; imagen: string; descripcion: string; url: string; tienda: string; marca: string; modelo: string; categoria: string; fechaScraped: Date; }
+interface MercadoLibreItem { id: string; title: string; price: number; thumbnail?: string; permalink: string; seller?: { nickname?: string; }; attributes?: Array<{ id: string; value_name: string }>; }
+interface MercadoLibreResponse { results: MercadoLibreItem[]; }
 
-interface Repuesto {
-  id: string;
-  nombre: string;
-  precio: number;
-  imagen: string;
-  descripcion: string;
-  url: string;
-  tienda: string;
-  marca: string;
-  modelo: string;
-  categoria: string;
-  fechaScraped: Date;
-}
+// 🟢 NUEVO DISFRAZ: Simular un navegador estándar de forma completa
+const HEADERS_REALES = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'es-419,es;q=0.9',
+  'Connection': 'keep-alive'
+};
 
-// Tipos para la respuesta de MercadoLibre API
-interface MercadoLibreItem {
-  id: string;
-  title: string;
-  price: number;
-  thumbnail?: string;
-  permalink: string;
-  seller?: {
-    nickname?: string;
-  };
-}
-
-interface MercadoLibreResponse {
-  results: MercadoLibreItem[];
-}
-
-/**
- * Busca en MercadoLibre Chile
- */
 const searchMercadoLibre = async (pieza: string, modelo: string): Promise<Repuesto[]> => {
   try {
     const query = `${pieza} ${modelo}`;
-    const apiUrl = `https://api.mercadolibre.com/sites/MLC/search?q=${encodeURIComponent(query)}&limit=30`;
+    const apiUrl = `https://api.mercadolibre.com/sites/MLC/search?q=${encodeURIComponent(query)}&limit=50&sort=relevance`;
+    
+    console.log(`🔗 Conectando a ML: ${apiUrl}`);
+    
+    const response = await fetch(apiUrl, { headers: HEADERS_REALES }); // Usamos los headers nuevos
 
-    console.log('🔍 MercadoLibre: Buscando desde servidor...');
-
-    const response = await fetch(apiUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'CarMarketFinder/1.0',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`MercadoLibre API error: ${response.status}`);
+    if (response.status === 403) {
+      console.error('❌ MercadoLibre bloqueó la IP (403). Intentando sin headers...');
+      // INTENTO DE RESPALDO: Si falla con headers, probamos SIN headers
+      const responseBackup = await fetch(apiUrl);
+      if (!responseBackup.ok) return [];
+      const dataBackup = await responseBackup.json() as MercadoLibreResponse;
+      return procesarResultadosML(dataBackup, modelo);
     }
 
+    if (!response.ok) return [];
+    
     const data = await response.json() as MercadoLibreResponse;
+    return procesarResultadosML(data, modelo);
 
-    if (!data.results || data.results.length === 0) {
-      console.log('⚠️ MercadoLibre: Sin resultados');
-      return [];
-    }
-
-    console.log(`✅ MercadoLibre: ${data.results.length} productos encontrados`);
-
-    return data.results.map((item) => ({
-      id: `ml-${item.id}`,
-      nombre: item.title,
-      precio: item.price,
-      imagen: item.thumbnail?.replace('http://', 'https://') || 'https://placehold.co/200x200?text=Sin+Imagen',
-      descripcion: `Vendedor: ${item.seller?.nickname || 'MercadoLibre'}`,
-      url: item.permalink,
-      tienda: 'MercadoLibre',
-      marca: 'Genérico',
-      modelo: modelo,
-      categoria: 'Otros',
-      fechaScraped: new Date(),
-    }));
   } catch (error) {
-    const err = error as Error;
-    console.error('❌ Error en MercadoLibre:', err.message);
+    console.error('Error en ML:', error);
     return [];
   }
 };
 
-/**
- * Busca en Yapo.cl (usando MercadoLibre API con categoría de vehículos)
- */
+// Función auxiliar para no repetir código
+const procesarResultadosML = (data: MercadoLibreResponse, modelo: string): Repuesto[] => {
+  if (!data.results) return [];
+  return data.results.map((item) => ({
+    id: `ml-${item.id}`,
+    nombre: item.title,
+    precio: item.price,
+    imagen: item.thumbnail?.replace('http://', 'https://').replace('-I.jpg', '-V.jpg') || '',
+    descripcion: `Vendedor: ${item.seller?.nickname || 'MercadoLibre'}`,
+    url: item.permalink,
+    tienda: 'MercadoLibre',
+    marca: item.attributes?.find((a) => a.id === 'BRAND')?.value_name || 'Genérico',
+    modelo: modelo,
+    categoria: 'Otros',
+    fechaScraped: new Date(),
+  }));
+};
+
 const searchYapo = async (pieza: string, modelo: string): Promise<Repuesto[]> => {
+  // Misma lógica simplificada para Yapo (usando la API de ML como proxy)
   try {
     const query = `${pieza} ${modelo} auto`;
     const apiUrl = `https://api.mercadolibre.com/sites/MLC/search?q=${encodeURIComponent(query)}&limit=20&category=MLC1743`;
-
-    console.log('🔍 Yapo: Buscando...');
-
-    const response = await fetch(apiUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'CarMarketFinder/1.0',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Yapo API error: ${response.status}`);
-    }
-
+    const response = await fetch(apiUrl, { headers: HEADERS_REALES });
+    if (!response.ok) return [];
     const data = await response.json() as MercadoLibreResponse;
-
-    if (!data.results || data.results.length === 0) {
-      console.log('⚠️ Yapo: Sin resultados');
-      return [];
-    }
-
-    console.log(`✅ Yapo: ${data.results.length} productos encontrados`);
-
+    if (!data.results) return [];
+    
     return data.results.slice(0, 15).map((item) => ({
       id: `yapo-${item.id}`,
       nombre: item.title,
       precio: item.price,
-      imagen: item.thumbnail?.replace('http://', 'https://') || 'https://placehold.co/200x200?text=Yapo',
-      descripcion: `${item.seller?.nickname || 'Vendedor particular'}`,
+      imagen: item.thumbnail?.replace('http://', 'https://') || '',
+      descripcion: 'Vendedor particular',
       url: item.permalink,
       tienda: 'Yapo',
       marca: 'Genérico',
@@ -130,101 +84,51 @@ const searchYapo = async (pieza: string, modelo: string): Promise<Repuesto[]> =>
       categoria: 'Otros',
       fechaScraped: new Date(),
     }));
-  } catch (error) {
-    const err = error as Error;
-    console.error('❌ Error en Yapo:', err.message);
-    return [];
-  }
+  } catch (error) { return []; }
 };
 
-/**
- * Función principal de búsqueda multi-tienda
- */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Configurar CORS para permitir peticiones desde cualquier origen
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,Content-Type,Accept');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // Manejar preflight request
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
-    // Obtener parámetros de la petición
-    let pieza: string;
-    let modelo: string;
+    const { pieza, modelo } = req.method === 'POST' ? req.body : req.query;
+    if (!pieza || !modelo) return res.status(400).json({ error: 'Faltan datos' });
 
-    if (req.method === 'POST') {
-      const body = req.body as SearchParams;
-      pieza = body.pieza;
-      modelo = body.modelo;
-    } else {
-      // GET request
-      pieza = req.query.pieza as string;
-      modelo = req.query.modelo as string;
-    }
+    console.log(`🔎 API Buscando: ${pieza} ${modelo}`);
 
-    // Validar parámetros
-    if (!pieza || !modelo) {
-      return res.status(400).json({
-        error: 'Faltan parámetros requeridos: pieza y modelo',
-        success: false,
-      });
-    }
-
-    console.log(`🔎 API: Buscando "${pieza} ${modelo}"...`);
-
-    // Buscar en todas las tiendas en paralelo
-    const [mercadoLibreResults, yapoResults] = await Promise.all([
-      searchMercadoLibre(pieza, modelo),
-      searchYapo(pieza, modelo),
+    const [mlResults, yapoResults] = await Promise.all([
+      searchMercadoLibre(pieza as string, modelo as string),
+      searchYapo(pieza as string, modelo as string),
     ]);
 
-    // Combinar resultados
-    const allResults = [
-      ...mercadoLibreResults,
-      ...yapoResults,
-    ];
+    const allResults = [...mlResults, ...yapoResults];
 
-    // Agregar Google Shopping como fallback
+    // Siempre agregamos Google Shopping al final
     const query = `${pieza} ${modelo}`;
     allResults.push({
       id: 'google-shopping',
-      nombre: `Buscar "${pieza}" en Google Shopping`,
+      nombre: `Buscar "${pieza}" en Google`,
       precio: 0,
-      descripcion: 'Comparar en más tiendas',
       imagen: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/768px-Google_%22G%22_logo.svg.png',
+      descripcion: 'Ver resultados en la web',
       url: `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(query)}`,
       tienda: 'Otros',
       marca: 'Google',
-      modelo: modelo,
+      modelo: modelo as string,
       categoria: 'Otros',
       fechaScraped: new Date(),
     });
 
-    console.log(`✅ API: ${allResults.length} productos encontrados en total`);
-
-    // Retornar resultados
     return res.status(200).json({
       success: true,
       count: allResults.length,
-      stores: {
-        mercadolibre: mercadoLibreResults.length,
-        yapo: yapoResults.length,
-      },
-      results: allResults,
+      results: allResults
     });
-
-  } catch (error) {
-    const err = error as Error;
-    console.error('❌ Error en API:', err);
-    return res.status(500).json({
-      error: err.message || 'Error interno del servidor',
-      success: false,
-    });
+  } catch (e: any) {
+    return res.status(500).json({ error: e.message });
   }
 }
