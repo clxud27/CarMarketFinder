@@ -13,7 +13,7 @@ const getApiUrl = (): string => {
 interface ApiSearchResponse {
   success: boolean;
   count: number;
-  stores: {
+  stores?: { // El interrogante '?' lo hace opcional para que no falle si falta
     mercadolibre: number;
     yapo: number;
   };
@@ -54,13 +54,21 @@ export const searchRepuestosApi = async (
     }
 
     console.log(`✅ API respondió con ${data.count} resultados`);
-    console.log(`📊 Estadísticas: MercadoLibre=${data.stores.mercadolibre}, Yapo=${data.stores.yapo}`);
+    
+    // 🛡️ CORRECCIÓN DE SEGURIDAD:
+    // Verificamos que 'data.stores' exista antes de intentar leer sus propiedades.
+    // Esto evita el error "Cannot read properties of undefined".
+    if (data.stores) {
+      console.log(`📊 Estadísticas: MercadoLibre=${data.stores.mercadolibre}, Yapo=${data.stores.yapo}`);
+    } else {
+      console.log('📊 Estadísticas no disponibles en esta respuesta (pero sí hay resultados)');
+    }
 
     return data.results;
 
   } catch (error: any) {
     console.error('❌ Error llamando a la API:', error);
-    throw error;
+    throw error; // Re-lanzamos el error para que lo maneje el componente visual
   }
 };
 
