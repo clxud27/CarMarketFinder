@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-// 1. IMPORTAMOS 'DynamicRetrievalMode' PARA CORREGIR EL ERROR DE TIPOS
 import { GoogleGenerativeAI, DynamicRetrievalMode } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
@@ -22,7 +21,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // CAMBIO CLAVE: Usamos la versión exacta '002' para evitar el error 404
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-002" });
 
     const prompt = `
       Actúa como un buscador de repuestos de autos para Chile.
@@ -53,7 +53,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         {
           googleSearchRetrieval: {
             dynamicRetrievalConfig: {
-              // 2. USAMOS EL ENUM EN LUGAR DEL TEXTO PLANO
               mode: DynamicRetrievalMode.MODE_DYNAMIC,
               dynamicThreshold: 0.7,
             },
@@ -67,13 +66,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log("🤖 Respuesta cruda de IA:", text.substring(0, 100) + "...");
 
+    // Limpieza robusta del JSON (quita ```json, ``` y espacios)
     const jsonString = text.replace(/```json|```/g, "").trim();
     
     let resultados = [];
     try {
         resultados = JSON.parse(jsonString);
     } catch (e) {
-        console.error("Error parseando JSON de IA:", e);
+        console.error("Error parseando JSON de IA. Texto recibido:", text);
         resultados = [];
     }
 
@@ -88,8 +88,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   } catch (error: any) {
     console.error('❌ Error IA:', error);
+    // Manejo específico para cuotas o errores de modelo
+    const mensajeError = error.message || 'Error generando búsqueda con IA';
     return res.status(500).json({ 
-      error: error.message || 'Error generando búsqueda con IA',
+      error: mensajeError,
       success: false 
     });
   }
