@@ -3,9 +3,13 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
+// Función de espera para reintentos
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 interface SearchParams { pieza: string; modelo: string; }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Configuración de CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -19,16 +23,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Faltan datos' });
     }
 
-    console.log(`🤖 IA Buscando (Modelo 2.0): ${pieza} ${modelo}...`);
+    console.log(`🤖 IA Buscando (Modelo Lite): ${pieza} ${modelo}...`);
 
-    // 1. USAMOS EL MODELO 2.0 (El único que tu cuenta detectó correctamente)
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    // 1. Usamos el modelo 2.0 Flash Lite (Rápido y con mayor cuota gratuita)
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
 
     const prompt = `
       Actúa como un buscador de repuestos de autos para Chile.
       Busca en Google Shopping 5 opciones reales de compra para: "${pieza} ${modelo}".
       
-      IMPORTANTE: Devuélveme SOLO un arreglo JSON.
+      IMPORTANTE: Devuélveme SOLO un arreglo JSON válido.
       Formato exacto:
       [
         {
@@ -41,44 +45,79 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           "descripcion": "Descripción breve",
           "marca": "Marca",
           "modelo": "${modelo}",
-          "categoria": "Repuestos",
-          "tiendaTipo": "Repuesto"
+          "categoria": "Repuestos"
         }
       ]
     `;
 
-    // 2. CONFIGURACIÓN CORRECTA PARA GEMINI 2.0
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      tools: [
-        {
-          // @ts-ignore: Ignoramos el error de tipo porque la librería aún no actualiza la definición para 2.0
-          googleSearch: {} 
-        },
-      ],
-    });
+    // --- LÓGICA DE REINTENTO (RETRY) ---
+    let result = null;
+    let intentos = 0;
+    const maxIntentos = 3;
+
+    while (intentos < maxIntentos) {
+      try {
+        result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          tools: [
+            {
+              // @ts-ignore: Usamos 'as any' para evitar conflictos de tipos con versiones antiguas del SDK
+              googleSearch: {} 
+            } as any, 
+          ],
+        });
+        break; // Éxito, salimos del bucle
+      } catch (error: any) {
+        // Manejo de cuota excedida (429)
+        if (error.message?.includes('429') || error.status === 429) {
+          intentos++;
+          console.warn(`⚠️ Cuota excedida (429). Reintentando en 3s... (Intento ${intentos}/${maxIntentos})`);
+          await delay(3000); 
+        } else {
+          throw error; // Otro error, fallamos
+        }
+      }
+    }
+
+    if (!result) {
+      throw new Error("La IA no pudo completar la búsqueda en este momento.");
+    }
 
     const response = result.response;
     const text = response.text();
-    console.log("🤖 Respuesta IA:", text.substring(0, 50) + "...");
+    console.log("🤖 Respuesta IA recibida");
 
+    // Limpieza y parseo del JSON
     const jsonString = text.replace(/```json|```/g, "").trim();
+    
     let resultados = [];
     try {
         resultados = JSON.parse(jsonString);
-        // Aseguramos que sea un array
         if (!Array.isArray(resultados)) resultados = [];
         
-        // Añadimos fecha y ID si faltan
-        resultados = resultados.map((r: any, i: number) => ({
-            ...r,
-            id: r.id || `ia-${Date.now()}-${i}`,
-            fechaScraped: new Date(),
-            tienda: r.tienda || "Tienda Web"
-        }));
+        // Normalización de datos para el Frontend
+        resultados = resultados.map((r: any, i: number) => {
+            const tiendaOriginal = r.tienda || "Tienda Web";
+            
+            // Clasificación de tiendas para los filtros
+            let tiendaValida = "Otros";
+            const tLower = tiendaOriginal.toLowerCase();
+            if (tLower.includes("mercado")) tiendaValida = "MercadoLibre";
+            else if (tLower.includes("yapo")) tiendaValida = "Yapo";
+            else if (tLower.includes("autopartners")) tiendaValida = "AutoPartners";
+            
+            return {
+                ...r,
+                id: r.id || `ia-${Date.now()}-${i}`,
+                fechaScraped: new Date(),
+                tienda: tiendaValida,
+                descripcion: `[Vendedor: ${tiendaOriginal}] ${r.descripcion || ''}`,
+                precio: typeof r.precio === 'string' ? parseInt(r.precio.replace(/\D/g, '')) || 0 : r.precio
+            };
+        });
 
     } catch (e) {
-        console.error("Error JSON IA", e);
+        console.error("Error procesando JSON de IA", e);
         resultados = [];
     }
 
@@ -92,18 +131,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
   } catch (error: any) {
-    console.error('❌ Error IA:', error.message);
-    
-    // Si es error de cuota (429), devolvemos un mensaje amigable
-    if (error.message?.includes('429') || error.message?.includes('Quota')) {
-        return res.status(429).json({ 
-            error: 'La IA está saturada (demasiadas búsquedas). Espera 1 minuto y reintenta.',
-            success: false 
-        });
-    }
-
+    console.error('❌ Error IA Final:', error.message);
     return res.status(500).json({ 
-      error: error.message || 'Error interno',
+      error: error.message || 'Error interno del servidor',
       success: false 
     });
   }
