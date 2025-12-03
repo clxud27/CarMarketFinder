@@ -39,27 +39,26 @@ export const buscarRepuestos = async (
   try {
     const resultados = await searchRepuestosApi(pieza, modelo);
 
-    // 🔴 CAMBIO CRÍTICO DE SEGURIDAD 🔴
-    // Solo guardamos si encontramos MÁS de 1 resultado.
-    // (Porque 1 resultado significa que solo encontró el link de Google y falló lo demás)
     const valeLaPenaGuardar = resultados.length > 1;
 
     if (valeLaPenaGuardar) {
       console.log(`💾 Guardando ${resultados.length} resultados válidos en DB...`);
-      try {
-        await addDoc(collection(db, 'historial_global_repuestos'), {
-          termino_id: terminoBusqueda,
-          pieza_buscada: pieza,
-          modelo_buscado: modelo,
-          resultados: resultados,
-          fecha_actualizacion: Timestamp.now(),
-          cantidad_resultados: resultados.length
-        });
-      } catch (saveError) {
-        console.error('Error guardando en DB:', saveError);
-      }
+      
+      // CAMBIO AQUÍ: Quitamos el 'await' para que no bloquee la interfaz
+      // Usamos .then y .catch para manejarlo en segundo plano
+      addDoc(collection(db, 'historial_global_repuestos'), {
+        termino_id: terminoBusqueda,
+        pieza_buscada: pieza,
+        modelo_buscado: modelo,
+        resultados: resultados,
+        fecha_actualizacion: Timestamp.now(),
+        cantidad_resultados: resultados.length
+      })
+      .then(() => console.log('✅ Guardado exitoso en background'))
+      .catch((err) => console.error('❌ Error guardando en background (revisar env vars en Vercel):', err));
+      
     } else {
-      console.warn('⚠️ Pocos resultados (posible bloqueo), NO se guardará en historial.');
+      console.warn('⚠️ Pocos resultados, NO se guardará en historial.');
     }
 
     return { repuestos: resultados, fromCache: false };
