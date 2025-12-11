@@ -3,11 +3,9 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-// Aumentamos el tiempo de espera entre reintentos para no saturar la API
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Configuración de CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -23,8 +21,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
 
-    // ✅ CAMBIO: Usamos gemini-1.5-flash-002 que es más estable y tiene mejor cuota
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-002" });
+    // ✅ CORRECCIÓN: Usar gemini-1.5-flash (SIN el -002)
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     const prompt = `
       Actúa como un experto buscador de repuestos de autos en Chile.
@@ -65,11 +63,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break; 
       } catch (error: any) {
         lastError = error;
-        // Si es error de cuota (429), esperamos más tiempo
         if (error.message?.includes('429') || error.status === 429 || error.status === 503) {
           intentos++;
           console.warn(`⚠️ Intento ${intentos} fallido (Cuota/Red). Esperando 10s...`);
-          await delay(10000); // ✅ CAMBIO: De 4s a 10s
+          await delay(10000);
         } else {
           console.error("❌ Error no recuperable:", error.message);
           throw error;
@@ -79,7 +76,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!result) {
       console.error("❌ Se agotaron los intentos de conexión con Gemini.");
-      // Mensaje específico para el frontend
       return res.status(429).json({ 
         error: 'El servicio de IA está saturado momentáneamente. Por favor espera 1 minuto e intenta de nuevo.',
         success: false 
@@ -90,7 +86,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let text = response.text();
     console.log("🤖 Respuesta IA recibida");
 
-    // Limpieza agresiva del JSON
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (jsonMatch) text = jsonMatch[0];
@@ -135,7 +130,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (error: any) {
     console.error('❌ Error API Handler:', error.message);
     
-    // Devolvemos el estado correcto al frontend
     const status = error.message?.includes('429') ? 429 : 500;
     const msg = status === 429 
       ? 'Cuota excedida. Espera un momento.' 
