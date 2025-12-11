@@ -21,8 +21,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
 
-    // ✅ MODELO LEGACY - Compatible con todas las API keys
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    // ✅ Intentamos múltiples nombres de modelos por compatibilidad
+    let model;
+    let modeloUsado = '';
+    
+    try {
+      // Intenta primero con gemini-2.0-flash-exp (el que usabas antes)
+      model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+      modeloUsado = 'gemini-2.0-flash-exp';
+    } catch (e) {
+      try {
+        // Si falla, intenta con gemini-1.5-flash-latest
+        model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        modeloUsado = 'gemini-1.5-flash-latest';
+      } catch (e2) {
+        // Último recurso: gemini-flash
+        model = genAI.getGenerativeModel({ model: "gemini-flash" });
+        modeloUsado = 'gemini-flash';
+      }
+    }
+
+    console.log(`📌 Usando modelo: ${modeloUsado}`);
 
     const prompt = `
       Actúa como un experto buscador de repuestos de autos en Chile.
@@ -36,13 +55,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       [
         {
           "id": "1",
-          "nombre": "Bomba de Agua Toyota Yaris 2013 Original",
+          "nombre": "Título del producto realista",
           "precio": 35000,
           "tienda": "MercadoLibre",
           "url": "https://www.mercadolibre.cl/producto-ejemplo",
           "imagen": "https://placehold.co/300x300?text=Repuesto",
-          "descripcion": "Bomba de agua compatible con Toyota Yaris 2013",
-          "marca": "Toyota",
+          "descripcion": "Breve descripción técnica",
+          "marca": "Compatible",
           "modelo": "${modelo}",
           "categoria": "Repuestos"
         }
