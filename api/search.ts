@@ -25,7 +25,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // CAMBIO CLAVE: Usamos la versión específica "001" de Flash-Lite.
     // Esta versión suele ser la más estable y económica en cuota.
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite-001" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
     const prompt = `
       Actúa como un experto buscador de repuestos de autos en Chile.
