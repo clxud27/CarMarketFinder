@@ -23,8 +23,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
 
-    // CAMBIO: Usamos gemini-1.5-flash que es más estable y tiene mejor cuota gratuita
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // CAMBIO IMPORTANTE: Usamos 'gemini-2.0-flash' que es el modelo estable actual.
+    // 'gemini-1.5-flash' está retirado y 'gemini-2.0-flash-lite' te dió error de cuota.
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     const prompt = `
       Actúa como un experto buscador de repuestos de autos en Chile.
@@ -61,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         result = await model.generateContent({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          // Si el modelo soporta búsqueda, la activamos. Si falla, el try/catch lo maneja.
+          // Si el modelo soporta búsqueda, la activamos.
           tools: [{ googleSearch: {} } as any], 
         });
         break; 
@@ -73,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           console.warn(`⚠️ Intento ${intentos} fallido (${error.status || 'Error'}). Reintentando en 2s...`);
           await delay(2000); 
         } else {
-          // Si es otro error (ej: API Key inválida), no tiene sentido reintentar
+          // Si es error 404 (Modelo no encontrado) o 400 (Bad Request), fallamos rápido
           console.error("❌ Error no recuperable:", error.message);
           throw error;
         }
@@ -81,7 +82,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!result) {
-      // Si llegamos aquí, es porque agotamos los intentos
       console.error("❌ Se agotaron los intentos de conexión con Gemini.");
       throw new Error(`Servicio ocupado o cuota excedida. Último error: ${lastError?.message}`);
     }
@@ -90,10 +90,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let text = response.text();
     console.log("🤖 Respuesta IA recibida");
 
-    // Limpieza agresiva del JSON para evitar errores de parseo
+    // Limpieza agresiva del JSON
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
     
-    // A veces la IA añade texto antes o después del JSON, intentamos extraer solo el array
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
         text = jsonMatch[0];
@@ -104,11 +103,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         resultados = JSON.parse(text);
         
         if (!Array.isArray(resultados)) {
-            // Si devuelve un solo objeto en lugar de array, lo envolvemos
             resultados = [resultados]; 
         }
         
-        // Normalización de datos
         resultados = resultados.map((r: any, i: number) => {
             const tiendaOriginal = r.tienda || "Tienda Web";
             
@@ -123,9 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 id: r.id || `ia-${Date.now()}-${i}`,
                 fechaScraped: new Date(),
                 tienda: tiendaValida,
-                // Asegurar que el precio sea un número
                 precio: typeof r.precio === 'string' ? parseInt(r.precio.replace(/\D/g, '')) || 0 : r.precio,
-                // Asegurar imagen por defecto si falla
                 imagen: r.imagen || "https://placehold.co/300x300?text=No+Image"
             };
         });
@@ -145,9 +140,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
   } catch (error: any) {
-    console.error('❌ Error API Handler:', error);
+    console.error('❌ Error API Handler:', error.message);
+    
+    // Devolvemos un mensaje más amigable al frontend
+    let userMessage = 'Error interno del servidor';
+    if (error.message?.includes('429')) userMessage = 'Cuota de IA excedida, intenta en unos minutos.';
+    if (error.message?.includes('404')) userMessage = 'Modelo de IA no disponible, contacta al administrador.';
+
     return res.status(500).json({ 
-      error: error.message || 'Error interno del servidor',
+      error: userMessage,
+      debug: error.message,
       success: false 
     });
   }
