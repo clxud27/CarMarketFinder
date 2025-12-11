@@ -3,7 +3,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-// Función de espera para reintentos
+// Aumentamos el tiempo de espera entre reintentos para no saturar la API
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -23,9 +23,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
 
-    // CAMBIO IMPORTANTE: Usamos 'gemini-2.0-flash' que es el modelo estable actual.
-    // 'gemini-1.5-flash' está retirado y 'gemini-2.0-flash-lite' te dió error de cuota.
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // CAMBIO CLAVE: Usamos la versión específica "001" de Flash-Lite.
+    // Esta versión suele ser la más estable y económica en cuota.
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite-001" });
 
     const prompt = `
       Actúa como un experto buscador de repuestos de autos en Chile.
@@ -52,7 +52,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ]
     `;
 
-    // --- LÓGICA DE REINTENTO MEJORADA ---
     let result = null;
     let intentos = 0;
     const maxIntentos = 3;
@@ -62,19 +61,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         result = await model.generateContent({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          // Si el modelo soporta búsqueda, la activamos.
           tools: [{ googleSearch: {} } as any], 
         });
         break; 
       } catch (error: any) {
         lastError = error;
-        // Manejo de cuota excedida (429) o Servicio no disponible (503)
+        // Si es error de cuota (429), esperamos más tiempo (4 segundos)
         if (error.message?.includes('429') || error.status === 429 || error.status === 503) {
           intentos++;
-          console.warn(`⚠️ Intento ${intentos} fallido (${error.status || 'Error'}). Reintentando en 2s...`);
-          await delay(2000); 
+          console.warn(`⚠️ Intento ${intentos} fallido (Cuota/Red). Esperando 4s...`);
+          await delay(4000); 
         } else {
-          // Si es error 404 (Modelo no encontrado) o 400 (Bad Request), fallamos rápido
           console.error("❌ Error no recuperable:", error.message);
           throw error;
         }
@@ -83,7 +80,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!result) {
       console.error("❌ Se agotaron los intentos de conexión con Gemini.");
-      throw new Error(`Servicio ocupado o cuota excedida. Último error: ${lastError?.message}`);
+      // Mensaje específico para el frontend
+      return res.status(429).json({ 
+        error: 'El servicio de IA está saturado momentáneamente. Por favor espera 1 minuto e intenta de nuevo.',
+        success: false 
+      });
     }
 
     const response = result.response;
@@ -92,23 +93,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Limpieza agresiva del JSON
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    
     const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-        text = jsonMatch[0];
-    }
+    if (jsonMatch) text = jsonMatch[0];
 
     let resultados = [];
     try {
         resultados = JSON.parse(text);
-        
-        if (!Array.isArray(resultados)) {
-            resultados = [resultados]; 
-        }
+        if (!Array.isArray(resultados)) resultados = [resultados];
         
         resultados = resultados.map((r: any, i: number) => {
             const tiendaOriginal = r.tienda || "Tienda Web";
-            
             let tiendaValida = "Otros";
             const tLower = tiendaOriginal.toLowerCase();
             if (tLower.includes("mercado") || tLower.includes("mercadolibre")) tiendaValida = "MercadoLibre";
@@ -126,8 +120,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
     } catch (e) {
-        console.error("❌ Error parseando JSON de la IA:", text);
-        return res.status(500).json({ error: 'La IA devolvió un formato inválido', raw: text });
+        console.error("❌ Error parseando JSON:", text);
+        return res.status(500).json({ error: 'Formato de respuesta inválido', raw: text });
     }
 
     console.log(`✅ IA encontró ${resultados.length} productos.`);
@@ -142,15 +136,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (error: any) {
     console.error('❌ Error API Handler:', error.message);
     
-    // Devolvemos un mensaje más amigable al frontend
-    let userMessage = 'Error interno del servidor';
-    if (error.message?.includes('429')) userMessage = 'Cuota de IA excedida, intenta en unos minutos.';
-    if (error.message?.includes('404')) userMessage = 'Modelo de IA no disponible, contacta al administrador.';
+    // Devolvemos el estado correcto al frontend
+    const status = error.message?.includes('429') ? 429 : 500;
+    const msg = status === 429 
+      ? 'Cuota excedida. Espera un momento.' 
+      : 'Error interno del servidor';
 
-    return res.status(500).json({ 
-      error: userMessage,
-      debug: error.message,
-      success: false 
-    });
+    return res.status(status).json({ error: msg, success: false });
   }
 }
