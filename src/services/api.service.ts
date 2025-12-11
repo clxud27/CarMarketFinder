@@ -13,7 +13,7 @@ const getApiUrl = (): string => {
 interface ApiSearchResponse {
   success: boolean;
   count: number;
-  stores?: { // El interrogante '?' lo hace opcional para que no falle si falta
+  stores?: {
     mercadolibre: number;
     yapo: number;
   };
@@ -22,54 +22,74 @@ interface ApiSearchResponse {
 }
 
 /**
- * Busca repuestos usando la API de Vercel Functions
+ * Busca repuestos usando la API de Vercel Functions con reintentos automáticos
  */
 export const searchRepuestosApi = async (
   pieza: string,
   modelo: string
 ): Promise<Repuesto[]> => {
-  try {
-    const apiUrl = `${getApiUrl()}/api/search`;
+  const maxReintentos = 3;
+  let intento = 0;
 
-    console.log(`🌐 Llamando a API: ${apiUrl}`);
-    console.log(`📦 Parámetros: pieza="${pieza}", modelo="${modelo}"`);
+  while (intento < maxReintentos) {
+    try {
+      const apiUrl = `${getApiUrl()}/api/search`;
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ pieza, modelo }),
-    });
+      console.log(`🌐 Llamando a API: ${apiUrl} (intento ${intento + 1}/${maxReintentos})`);
+      console.log(`📦 Parámetros: pieza="${pieza}", modelo="${modelo}"`);
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `API error: ${response.status}`);
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ pieza, modelo }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        
+        // Si es error 429 (rate limit), reintentamos con backoff exponencial
+        if (response.status === 429) {
+          intento++;
+          if (intento < maxReintentos) {
+            const delayTime = Math.pow(2, intento) * 3000; // 6s, 12s, 24s
+            console.warn(`⏳ Rate limit alcanzado. Reintentando en ${delayTime/1000}s...`);
+            await new Promise(resolve => setTimeout(resolve, delayTime));
+            continue; // Vuelve al inicio del bucle
+          }
+        }
+        
+        throw new Error(errorData.error || `API error: ${response.status}`);
+      }
+
+      const data: ApiSearchResponse = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || 'Error desconocido en la API');
+      }
+
+      console.log(`✅ API respondió con ${data.count} resultados`);
+      
+      if (data.stores) {
+        console.log(`📊 Estadísticas: MercadoLibre=${data.stores.mercadolibre}, Yapo=${data.stores.yapo}`);
+      } else {
+        console.log('📊 Estadísticas no disponibles en esta respuesta (pero sí hay resultados)');
+      }
+
+      return data.results;
+
+    } catch (error: any) {
+      // Si ya agotamos los reintentos, lanzamos el error
+      if (intento >= maxReintentos - 1) {
+        console.error('❌ Error llamando a la API:', error);
+        throw error;
+      }
+      intento++;
     }
-
-    const data: ApiSearchResponse = await response.json();
-
-    if (!data.success) {
-      throw new Error(data.error || 'Error desconocido en la API');
-    }
-
-    console.log(`✅ API respondió con ${data.count} resultados`);
-    
-    // 🛡️ CORRECCIÓN DE SEGURIDAD:
-    // Verificamos que 'data.stores' exista antes de intentar leer sus propiedades.
-    // Esto evita el error "Cannot read properties of undefined".
-    if (data.stores) {
-      console.log(`📊 Estadísticas: MercadoLibre=${data.stores.mercadolibre}, Yapo=${data.stores.yapo}`);
-    } else {
-      console.log('📊 Estadísticas no disponibles en esta respuesta (pero sí hay resultados)');
-    }
-
-    return data.results;
-
-  } catch (error: any) {
-    console.error('❌ Error llamando a la API:', error);
-    throw error; // Re-lanzamos el error para que lo maneje el componente visual
   }
+
+  throw new Error('Se agotaron los reintentos');
 };
 
 export const searchRepuestosApiGet = async (

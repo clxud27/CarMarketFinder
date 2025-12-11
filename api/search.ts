@@ -23,9 +23,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
 
-    // CAMBIO CLAVE: Usamos la versión específica "001" de Flash-Lite.
-    // Esta versión suele ser la más estable y económica en cuota.
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    // ✅ CAMBIO: Usamos gemini-1.5-flash-002 que es más estable y tiene mejor cuota
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-002" });
 
     const prompt = `
       Actúa como un experto buscador de repuestos de autos en Chile.
@@ -66,11 +65,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break; 
       } catch (error: any) {
         lastError = error;
-        // Si es error de cuota (429), esperamos más tiempo (4 segundos)
+        // Si es error de cuota (429), esperamos más tiempo
         if (error.message?.includes('429') || error.status === 429 || error.status === 503) {
           intentos++;
-          console.warn(`⚠️ Intento ${intentos} fallido (Cuota/Red). Esperando 4s...`);
-          await delay(4000); 
+          console.warn(`⚠️ Intento ${intentos} fallido (Cuota/Red). Esperando 10s...`);
+          await delay(10000); // ✅ CAMBIO: De 4s a 10s
         } else {
           console.error("❌ Error no recuperable:", error.message);
           throw error;
