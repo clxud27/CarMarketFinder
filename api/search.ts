@@ -21,27 +21,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
 
-    // ✅ Intentamos múltiples nombres de modelos por compatibilidad
-    let model;
-    let modeloUsado = '';
-    
-    try {
-      // Intenta primero con gemini-2.0-flash-exp (el que usabas antes)
-      model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
-      modeloUsado = 'gemini-2.0-flash-exp';
-    } catch (e) {
-      try {
-        // Si falla, intenta con gemini-1.5-flash-latest
-        model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
-        modeloUsado = 'gemini-1.5-flash-latest';
-      } catch (e2) {
-        // Último recurso: gemini-flash
-        model = genAI.getGenerativeModel({ model: "gemini-flash" });
-        modeloUsado = 'gemini-flash';
-      }
-    }
-
-    console.log(`📌 Usando modelo: ${modeloUsado}`);
+    // Usar el modelo que funcionaba antes
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
 
     const prompt = `
       Actúa como un experto buscador de repuestos de autos en Chile.
@@ -70,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let result = null;
     let intentos = 0;
-    const maxIntentos = 3;
+    const maxIntentos = 2; // ✅ Reducido a 2 intentos para no saturar
 
     while (intentos < maxIntentos) {
       try {
@@ -79,8 +60,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (error: any) {
         if (error.message?.includes('429') || error.status === 429 || error.status === 503) {
           intentos++;
-          console.warn(`⚠️ Intento ${intentos} fallido. Esperando 10s...`);
-          await delay(10000);
+          // ✅ DELAYS MUY LARGOS: 30s, 60s
+          const delayTime = Math.pow(2, intentos) * 30000;
+          console.warn(`⚠️ Intento ${intentos} fallido. Esperando ${delayTime/1000}s...`);
+          await delay(delayTime);
         } else {
           console.error("❌ Error no recuperable:", error.message);
           throw error;
@@ -91,14 +74,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!result) {
       console.error("❌ Se agotaron los intentos de conexión con Gemini.");
       return res.status(429).json({ 
-        error: 'El servicio de IA está saturado momentáneamente. Por favor espera 1 minuto e intenta de nuevo.',
+        error: 'El servicio de IA está saturado. Has excedido el límite de búsquedas. Por favor espera 5 minutos e intenta de nuevo.',
         success: false 
       });
     }
 
     const response = result.response;
     let text = response.text();
-    console.log("🤖 Respuesta IA recibida (primeros 200 chars):", text.substring(0, 200));
+    console.log("🤖 Respuesta IA recibida");
 
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
     const jsonMatch = text.match(/\[[\s\S]*\]/);
@@ -146,7 +129,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     
     const status = error.message?.includes('429') ? 429 : 500;
     const msg = status === 429 
-      ? 'Cuota excedida. Espera un momento.' 
+      ? 'Límite de búsquedas excedido. Espera 5 minutos.' 
       : error.message || 'Error interno del servidor';
 
     return res.status(status).json({ error: msg, success: false });

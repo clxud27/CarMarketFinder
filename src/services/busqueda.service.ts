@@ -5,7 +5,7 @@ import type { Repuesto } from '../types';
 
 // ✅ Control de rate limiting en el frontend
 let lastSearchTime = 0;
-const COOLDOWN_MS = 15000; // 15 segundos entre búsquedas
+const COOLDOWN_MS = 60000; // 60 segundos (1 minuto) entre búsquedas
 
 export const buscarRepuestos = async (
   pieza: string,
@@ -14,13 +14,14 @@ export const buscarRepuestos = async (
   const terminoBusqueda = `${pieza.toLowerCase().trim()}_${modelo.toLowerCase().trim()}`;
   console.log(`🔎 Iniciando búsqueda inteligente para: ${terminoBusqueda}`);
 
-  // ✅ RATE LIMITING: Verificar cooldown
+  // ✅ RATE LIMITING: Verificar cooldown ANTES de buscar en cache
   const now = Date.now();
   const timeSinceLastSearch = now - lastSearchTime;
   
-  if (timeSinceLastSearch < COOLDOWN_MS) {
+  if (lastSearchTime > 0 && timeSinceLastSearch < COOLDOWN_MS) {
     const waitTime = Math.ceil((COOLDOWN_MS - timeSinceLastSearch) / 1000);
-    throw new Error(`Por favor espera ${waitTime} segundos antes de buscar de nuevo para evitar saturar la API.`);
+    console.warn(`⏳ Cooldown activo. Espera ${waitTime}s`);
+    throw new Error(`Por favor espera ${waitTime} segundos antes de buscar de nuevo para no saturar la API de IA.`);
   }
 
   try {
@@ -41,6 +42,7 @@ export const buscarRepuestos = async (
     if (!querySnapshot.empty) {
       console.log('⚡ ¡Encontrado en Base de Datos!');
       const data = querySnapshot.docs[0].data();
+      // NO actualizamos lastSearchTime si viene del cache
       return { repuestos: data.resultados as Repuesto[], fromCache: true };
     }
   } catch (error) {
@@ -50,7 +52,7 @@ export const buscarRepuestos = async (
   // 2. BUSCAR EN API
   console.log('🌐 Escaneando MercadoLibre...');
   
-  // ✅ Actualizar timestamp de última búsqueda ANTES de llamar a la API
+  // ✅ Actualizar timestamp ANTES de llamar a la API
   lastSearchTime = Date.now();
   
   try {
@@ -78,10 +80,16 @@ export const buscarRepuestos = async (
 
     return { repuestos: resultados, fromCache: false };
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Error fatal:', error);
-    // ✅ Si falla, resetear el timestamp para permitir reintento inmediato
-    lastSearchTime = 0;
+    
+    // ✅ Si es error de rate limit (429), NO resetear el timestamp
+    // para forzar al usuario a esperar
+    if (!error.message?.includes('429') && !error.message?.includes('saturado')) {
+      // Solo resetear si NO es error de rate limit
+      lastSearchTime = 0;
+    }
+    
     throw error;
   }
 };
