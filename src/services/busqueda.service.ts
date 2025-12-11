@@ -3,12 +3,25 @@ import { db } from '../lib/firebase';
 import { searchRepuestosApi } from './api.service';
 import type { Repuesto } from '../types';
 
+// ✅ Control de rate limiting en el frontend
+let lastSearchTime = 0;
+const COOLDOWN_MS = 15000; // 15 segundos entre búsquedas
+
 export const buscarRepuestos = async (
   pieza: string,
   modelo: string
 ): Promise<{ repuestos: Repuesto[]; fromCache: boolean }> => {
   const terminoBusqueda = `${pieza.toLowerCase().trim()}_${modelo.toLowerCase().trim()}`;
   console.log(`🔎 Iniciando búsqueda inteligente para: ${terminoBusqueda}`);
+
+  // ✅ RATE LIMITING: Verificar cooldown
+  const now = Date.now();
+  const timeSinceLastSearch = now - lastSearchTime;
+  
+  if (timeSinceLastSearch < COOLDOWN_MS) {
+    const waitTime = Math.ceil((COOLDOWN_MS - timeSinceLastSearch) / 1000);
+    throw new Error(`Por favor espera ${waitTime} segundos antes de buscar de nuevo para evitar saturar la API.`);
+  }
 
   try {
     // 1. BUSCAR EN FIREBASE (CACHE)
@@ -36,6 +49,10 @@ export const buscarRepuestos = async (
 
   // 2. BUSCAR EN API
   console.log('🌐 Escaneando MercadoLibre...');
+  
+  // ✅ Actualizar timestamp de última búsqueda ANTES de llamar a la API
+  lastSearchTime = Date.now();
+  
   try {
     const resultados = await searchRepuestosApi(pieza, modelo);
 
@@ -44,8 +61,6 @@ export const buscarRepuestos = async (
     if (valeLaPenaGuardar) {
       console.log(`💾 Guardando ${resultados.length} resultados válidos en DB...`);
       
-      // CAMBIO AQUÍ: Quitamos el 'await' para que no bloquee la interfaz
-      // Usamos .then y .catch para manejarlo en segundo plano
       addDoc(collection(db, 'historial_global_repuestos'), {
         termino_id: terminoBusqueda,
         pieza_buscada: pieza,
@@ -55,7 +70,7 @@ export const buscarRepuestos = async (
         cantidad_resultados: resultados.length
       })
       .then(() => console.log('✅ Guardado exitoso en background'))
-      .catch((err) => console.error('❌ Error guardando en background (revisar env vars en Vercel):', err));
+      .catch((err) => console.error('❌ Error guardando en background:', err));
       
     } else {
       console.warn('⚠️ Pocos resultados, NO se guardará en historial.');
@@ -65,6 +80,8 @@ export const buscarRepuestos = async (
 
   } catch (error) {
     console.error('❌ Error fatal:', error);
-    return { repuestos: [], fromCache: false };
+    // ✅ Si falla, resetear el timestamp para permitir reintento inmediato
+    lastSearchTime = 0;
+    throw error;
   }
 };
