@@ -1,7 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from 'openai';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || '',
+});
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -19,49 +21,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Faltan datos: pieza o modelo' });
     }
 
-    console.log(`🤖 IA Buscando: ${pieza} ${modelo}...`);
+    console.log(`🤖 IA (OpenAI) Buscando: ${pieza} ${modelo}...`);
 
-    // Usar el modelo que funcionaba antes
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    const prompt = `Actúa como un experto buscador de repuestos de autos en Chile.
+Genera 5 opciones REALISTAS de compra para: "${pieza} ${modelo}".
 
-    const prompt = `
-      Actúa como un experto buscador de repuestos de autos en Chile.
-      Genera 5 opciones REALISTAS de compra para: "${pieza} ${modelo}".
-      
-      Inventa resultados basados en tiendas reales chilenas como MercadoLibre Chile, Yapo.cl, AutoPartners.
-      Los precios deben ser coherentes con el mercado chileno (entre $10.000 y $150.000 CLP).
+Inventa resultados basados en tiendas reales chilenas como MercadoLibre Chile, Yapo.cl, AutoPartners.
+Los precios deben ser coherentes con el mercado chileno (entre $10.000 y $150.000 CLP).
 
-      IMPORTANTE: Devuélveme SOLO un arreglo JSON válido. No uses Markdown.
-      Formato exacto:
-      [
-        {
-          "id": "1",
-          "nombre": "Título del producto realista",
-          "precio": 35000,
-          "tienda": "MercadoLibre",
-          "url": "https://www.mercadolibre.cl/producto-ejemplo",
-          "imagen": "https://placehold.co/300x300?text=Repuesto",
-          "descripcion": "Breve descripción técnica",
-          "marca": "Compatible",
-          "modelo": "${modelo}",
-          "categoria": "Repuestos"
-        }
-      ]
-    `;
+IMPORTANTE: Devuélveme SOLO un arreglo JSON válido. No uses Markdown.
+Formato exacto:
+[
+  {
+    "id": "1",
+    "nombre": "Título del producto realista",
+    "precio": 35000,
+    "tienda": "MercadoLibre",
+    "url": "https://www.mercadolibre.cl/producto-ejemplo",
+    "imagen": "https://placehold.co/300x300?text=Repuesto",
+    "descripcion": "Breve descripción técnica",
+    "marca": "Compatible",
+    "modelo": "${modelo}",
+    "categoria": "Repuestos"
+  }
+]`;
 
     let result = null;
     let intentos = 0;
-    const maxIntentos = 2; // ✅ Reducido a 2 intentos para no saturar
+    const maxIntentos = 2;
 
     while (intentos < maxIntentos) {
       try {
-        result = await model.generateContent(prompt);
-        break; 
+        const completion = await openai.chat.completions.create({
+          model: "gpt-3.5-turbo",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7,
+        });
+
+        result = completion.choices[0].message.content;
+        break;
       } catch (error: any) {
-        if (error.message?.includes('429') || error.status === 429 || error.status === 503) {
+        if (error.status === 429 || error.code === 'rate_limit_exceeded') {
           intentos++;
-          // ✅ DELAYS MUY LARGOS: 30s, 60s
-          const delayTime = Math.pow(2, intentos) * 30000;
+          const delayTime = Math.pow(2, intentos) * 5000;
           console.warn(`⚠️ Intento ${intentos} fallido. Esperando ${delayTime/1000}s...`);
           await delay(delayTime);
         } else {
@@ -72,15 +74,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!result) {
-      console.error("❌ Se agotaron los intentos de conexión con Gemini.");
-      return res.status(429).json({ 
-        error: 'El servicio de IA está saturado. Has excedido el límite de búsquedas. Por favor espera 5 minutos e intenta de nuevo.',
-        success: false 
+      return res.status(429).json({
+        error: 'Servicio saturado. Espera 1 minuto.',
+        success: false
       });
     }
 
-    const response = result.response;
-    let text = response.text();
+    let text = result;
     console.log("🤖 Respuesta IA recibida");
 
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
@@ -89,30 +89,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let resultados = [];
     try {
-        resultados = JSON.parse(text);
-        if (!Array.isArray(resultados)) resultados = [resultados];
-        
-        resultados = resultados.map((r: any, i: number) => {
-            const tiendaOriginal = r.tienda || "Tienda Web";
-            let tiendaValida = "Otros";
-            const tLower = tiendaOriginal.toLowerCase();
-            if (tLower.includes("mercado") || tLower.includes("mercadolibre")) tiendaValida = "MercadoLibre";
-            else if (tLower.includes("yapo")) tiendaValida = "Yapo";
-            else if (tLower.includes("autopartners")) tiendaValida = "AutoPartners";
-            
-            return {
-                ...r,
-                id: r.id || `ia-${Date.now()}-${i}`,
-                fechaScraped: new Date(),
-                tienda: tiendaValida,
-                precio: typeof r.precio === 'string' ? parseInt(r.precio.replace(/\D/g, '')) || 0 : r.precio,
-                imagen: r.imagen || "https://placehold.co/300x300?text=No+Image"
-            };
-        });
+      resultados = JSON.parse(text);
+      if (!Array.isArray(resultados)) resultados = [resultados];
+
+      resultados = resultados.map((r: any, i: number) => {
+        const tiendaOriginal = r.tienda || "Tienda Web";
+        let tiendaValida = "Otros";
+        const tLower = tiendaOriginal.toLowerCase();
+        if (tLower.includes("mercado") || tLower.includes("mercadolibre")) tiendaValida = "MercadoLibre";
+        else if (tLower.includes("yapo")) tiendaValida = "Yapo";
+        else if (tLower.includes("autopartners")) tiendaValida = "AutoPartners";
+
+        return {
+          ...r,
+          id: r.id || `ia-${Date.now()}-${i}`,
+          fechaScraped: new Date(),
+          tienda: tiendaValida,
+          precio: typeof r.precio === 'string' ? parseInt(r.precio.replace(/\D/g, '')) || 0 : r.precio,
+          imagen: r.imagen || "https://placehold.co/300x300?text=No+Image"
+        };
+      });
 
     } catch (e) {
-        console.error("❌ Error parseando JSON:", text);
-        return res.status(500).json({ error: 'Formato de respuesta inválido', raw: text });
+      console.error("❌ Error parseando JSON:", text);
+      return res.status(500).json({ error: 'Formato inválido', raw: text });
     }
 
     console.log(`✅ IA encontró ${resultados.length} productos.`);
@@ -126,11 +126,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   } catch (error: any) {
     console.error('❌ Error API Handler:', error.message);
-    
-    const status = error.message?.includes('429') ? 429 : 500;
-    const msg = status === 429 
-      ? 'Límite de búsquedas excedido. Espera 5 minutos.' 
-      : error.message || 'Error interno del servidor';
+
+    const status = error.status === 429 ? 429 : 500;
+    const msg = status === 429
+      ? 'Límite excedido. Espera un momento.'
+      : error.message || 'Error interno';
 
     return res.status(status).json({ error: msg, success: false });
   }
