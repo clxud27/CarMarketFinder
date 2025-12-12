@@ -48,7 +48,7 @@ Formato exacto:
 
     let result = null;
     let intentos = 0;
-    const maxIntentos = 2;
+    const maxIntentos = 3; // Aumentado de 2 a 3
 
     while (intentos < maxIntentos) {
       try {
@@ -63,9 +63,13 @@ Formato exacto:
       } catch (error: any) {
         if (error.status === 429 || error.code === 'rate_limit_exceeded') {
           intentos++;
-          const delayTime = Math.pow(2, intentos) * 5000;
-          console.warn(`⚠️ Intento ${intentos} fallido. Esperando ${delayTime/1000}s...`);
-          await delay(delayTime);
+          // Delays más largos: 15s, 45s, 90s
+          const delayTime = Math.pow(3, intentos) * 5000;
+          console.warn(`⚠️ OpenAI rate limit. Intento ${intentos}/${maxIntentos}. Esperando ${delayTime/1000}s...`);
+          
+          if (intentos < maxIntentos) {
+            await delay(delayTime);
+          }
         } else {
           console.error("❌ Error no recuperable:", error.message);
           throw error;
@@ -74,9 +78,10 @@ Formato exacto:
     }
 
     if (!result) {
-      return res.status(429).json({
-        error: 'Servicio saturado. Espera 1 minuto.',
-        success: false
+      return res.status(503).json({ // Cambiado de 429 a 503
+        error: 'OpenAI temporalmente no disponible. Por favor espera 2-3 minutos antes de intentar nuevamente.',
+        success: false,
+        retryAfter: 180 // segundos
       });
     }
 

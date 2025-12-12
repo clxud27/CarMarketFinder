@@ -5,7 +5,7 @@ import type { Repuesto } from '../types';
 
 // ✅ Control de rate limiting en el frontend
 let lastSearchTime = 0;
-const COOLDOWN_MS = 60000; // 60 segundos (1 minuto) entre búsquedas
+const COOLDOWN_MS = 120000; // 120 segundos (2 minutos) entre búsquedas - aumentado de 60s
 
 export const buscarRepuestos = async (
   pieza: string,
@@ -20,8 +20,8 @@ export const buscarRepuestos = async (
   
   if (lastSearchTime > 0 && timeSinceLastSearch < COOLDOWN_MS) {
     const waitTime = Math.ceil((COOLDOWN_MS - timeSinceLastSearch) / 1000);
-    console.warn(`⏳ Cooldown activo. Espera ${waitTime}s`);
-    throw new Error(`Por favor espera ${waitTime} segundos antes de buscar de nuevo para no saturar la API de IA.`);
+    console.warn(`⏳ Cooldown activo. Espera ${waitTime}s más`);
+    throw new Error(`⏳ Por favor espera ${waitTime} segundos antes de realizar otra búsqueda. Esto evita saturar el servicio de IA.`);
   }
 
   try {
@@ -83,10 +83,16 @@ export const buscarRepuestos = async (
   } catch (error: any) {
     console.error('❌ Error fatal:', error);
     
-    // ✅ Si es error de rate limit (429), NO resetear el timestamp
-    // para forzar al usuario a esperar
-    if (!error.message?.includes('429') && !error.message?.includes('saturado')) {
-      // Solo resetear si NO es error de rate limit
+    // ✅ Si es error de rate limit o servicio saturado, NO resetear el timestamp
+    // y aumentar el cooldown para forzar al usuario a esperar más
+    if (error.message?.includes('429') || 
+        error.message?.includes('503') || 
+        error.message?.includes('saturado') ||
+        error.message?.includes('temporalmente no disponible')) {
+      console.warn('🚫 Servicio saturado detectado. El cooldown permanece activo.');
+      // El lastSearchTime ya está seteado, no lo reseteamos
+    } else {
+      // Solo resetear si NO es error de saturación/rate limit
       lastSearchTime = 0;
     }
     

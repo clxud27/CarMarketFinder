@@ -19,6 +19,7 @@ interface ApiSearchResponse {
   };
   results: Repuesto[];
   error?: string;
+  retryAfter?: number;
 }
 
 /**
@@ -28,7 +29,7 @@ export const searchRepuestosApi = async (
   pieza: string,
   modelo: string
 ): Promise<Repuesto[]> => {
-  const maxReintentos = 3;
+  const maxReintentos = 2; // Reducido de 3 a 2
   let intento = 0;
 
   while (intento < maxReintentos) {
@@ -49,18 +50,26 @@ export const searchRepuestosApi = async (
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         
-        // Si es error 429 (rate limit), reintentamos con backoff exponencial
-        if (response.status === 429) {
+        // Si es error 429 o 503 (servicio saturado), esperamos más tiempo
+        if (response.status === 429 || response.status === 503) {
           intento++;
           if (intento < maxReintentos) {
-            const delayTime = Math.pow(2, intento) * 3000; // 6s, 12s, 24s
-            console.warn(`⏳ Rate limit alcanzado. Reintentando en ${delayTime/1000}s...`);
+            // Esperamos el tiempo sugerido por el servidor o 60 segundos
+            const retryAfter = errorData.retryAfter || 60;
+            const delayTime = retryAfter * 1000;
+            console.warn(`⏳ Servicio saturado. Esperando ${retryAfter}s antes de reintentar...`);
             await new Promise(resolve => setTimeout(resolve, delayTime));
-            continue; // Vuelve al inicio del bucle
+            continue;
+          } else {
+            // Último intento fallido, mensaje claro al usuario
+            throw new Error(
+              errorData.error || 
+              'El servicio está temporalmente saturado. Por favor espera 2-3 minutos e intenta nuevamente.'
+            );
           }
         }
         
-        throw new Error(errorData.error || `API error: ${response.status}`);
+        throw new Error(errorData.error || `Error del servidor: ${response.status}`);
       }
 
       const data: ApiSearchResponse = await response.json();
@@ -80,16 +89,18 @@ export const searchRepuestosApi = async (
       return data.results;
 
     } catch (error: any) {
-      // Si ya agotamos los reintentos, lanzamos el error
-      if (intento >= maxReintentos - 1) {
-        console.error('❌ Error llamando a la API:', error);
+      console.error('❌ Error llamando a la API:', error);
+      
+      // Si ya agotamos los reintentos o es un error no recuperable, lanzamos
+      if (intento >= maxReintentos - 1 || !error.message.includes('saturado')) {
         throw error;
       }
+      
       intento++;
     }
   }
 
-  throw new Error('Se agotaron los reintentos');
+  throw new Error('No se pudo completar la búsqueda después de varios intentos');
 };
 
 export const searchRepuestosApiGet = async (
