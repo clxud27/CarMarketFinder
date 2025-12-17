@@ -7,10 +7,30 @@ const openai = new OpenAI({
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Función auxiliar para generar URLs de búsqueda reales
+const generarUrlBusqueda = (tienda: string, pieza: string, modelo: string) => {
+  const query = `${pieza} ${modelo}`.trim();
+  const queryEncoded = encodeURIComponent(query);
+  const queryDashed = query.replace(/\s+/g, '-').toLowerCase();
+
+  switch (tienda) {
+    case 'MercadoLibre':
+      // MercadoLibre usa formato con guiones para mejores resultados
+      return `https://listado.mercadolibre.cl/${queryDashed}#D[A:${queryEncoded}]`;
+    case 'Yapo':
+      return `https://www.yapo.cl/chile?q=${queryEncoded}`;
+    case 'AutoPartners':
+      // Búsqueda genérica en el sitio o Google si no tienen buscador GET estándar
+      return `https://www.google.com/search?q=site:autopartners.cl+${queryEncoded}`;
+    default:
+      // Búsqueda en Google Shopping o General como fallback seguro
+      return `https://www.google.com/search?tbm=shop&q=${queryEncoded}`;
+  }
+};
+
 // 🆕 SISTEMA DE FALLBACK - Resultados mockeados realistas
 const generarResultadosMock = (pieza: string, modelo: string) => {
   const piezaNormalizada = pieza.toLowerCase();
-  const modeloNormalizada = modelo.toLowerCase();
   
   // Base de precios según tipo de pieza
   const preciosBase: Record<string, number> = {
@@ -26,8 +46,8 @@ const generarResultadosMock = (pieza: string, modelo: string) => {
     'sensor': 38000,
   };
 
-  // Detectar tipo de pieza
-  let precioBase = 30000; // Precio por defecto
+  // Detectar precio base
+  let precioBase = 30000;
   for (const [key, precio] of Object.entries(preciosBase)) {
     if (piezaNormalizada.includes(key)) {
       precioBase = precio;
@@ -39,7 +59,7 @@ const generarResultadosMock = (pieza: string, modelo: string) => {
   const marcas = ['Original', 'Compatible', 'Genérico', 'Premium', 'OEM'];
   
   return Array.from({ length: 5 }, (_, i) => {
-    const variacion = (Math.random() - 0.5) * 0.4; // ±20% variación
+    const variacion = (Math.random() - 0.5) * 0.4;
     const precio = Math.round(precioBase * (1 + variacion) / 1000) * 1000;
     const tienda = tiendas[i];
     
@@ -48,13 +68,10 @@ const generarResultadosMock = (pieza: string, modelo: string) => {
       nombre: `${pieza} para ${modelo} - ${marcas[i]}`,
       precio: precio,
       tienda: tienda,
-      url: tienda === 'MercadoLibre' 
-        ? `https://www.mercadolibre.cl/p/CHL${Math.floor(Math.random() * 999999)}`
-        : tienda === 'Yapo'
-        ? `https://www.yapo.cl/region_metropolitana/repuestos_${Math.random().toString(36).substring(7)}.htm`
-        : `https://www.autopartners.cl/producto/${Math.random().toString(36).substring(7)}`,
+      // 🟢 CORRECCIÓN: Usamos la función generadora de URLs reales
+      url: generarUrlBusqueda(tienda, pieza, modelo),
       imagen: `https://placehold.co/300x300/e0e0e0/666?text=${encodeURIComponent(pieza.substring(0, 20))}`,
-      descripcion: `${pieza} compatible con ${modelo}. Producto de calidad ${marcas[i].toLowerCase()}.`,
+      descripcion: `${pieza} compatible con ${modelo}. Producto de calidad ${marcas[i].toLowerCase()}. (Resultado referencial)`,
       marca: marcas[i],
       modelo: modelo,
       categoria: 'Repuestos',
@@ -80,27 +97,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(`🤖 IA (OpenAI) Buscando: ${pieza} ${modelo}...`);
 
     const prompt = `Actúa como un experto buscador de repuestos de autos en Chile.
-Genera 5 opciones REALISTAS de compra para: "${pieza} ${modelo}".
+Genera 5 opciones de repuestos para: "${pieza} ${modelo}".
+Los precios deben ser coherentes con el mercado chileno.
 
-Inventa resultados basados en tiendas reales chilenas como MercadoLibre Chile, Yapo.cl, AutoPartners.
-Los precios deben ser coherentes con el mercado chileno (entre $10.000 y $150.000 CLP).
-
-IMPORTANTE: Devuélveme SOLO un arreglo JSON válido. No uses Markdown.
+IMPORTANTE: Devuélveme SOLO un arreglo JSON válido.
 Formato exacto:
 [
   {
     "id": "1",
-    "nombre": "Título del producto realista",
+    "nombre": "Título descriptivo del producto",
     "precio": 35000,
-    "tienda": "MercadoLibre",
-    "url": "https://www.mercadolibre.cl/producto-ejemplo",
-    "imagen": "https://placehold.co/300x300?text=Repuesto",
+    "tienda": "MercadoLibre", 
     "descripcion": "Breve descripción técnica",
-    "marca": "Compatible",
+    "marca": "Marca del repuesto",
     "modelo": "${modelo}",
     "categoria": "Repuestos"
   }
-]`;
+]
+NOTA: No inventes URLs, las generaré yo programáticamente.`;
 
     let result = null;
     let intentos = 0;
@@ -120,28 +134,24 @@ Formato exacto:
       } catch (error: any) {
         if (error.status === 429 || error.code === 'rate_limit_exceeded') {
           intentos++;
-          // Delays más largos: 15s, 45s, 90s
           const delayTime = Math.pow(3, intentos) * 5000;
-          console.warn(`⚠️ OpenAI rate limit. Intento ${intentos}/${maxIntentos}. Esperando ${delayTime/1000}s...`);
+          console.warn(`⚠️ OpenAI rate limit. Intento ${intentos}/${maxIntentos}.`);
           
           if (intentos < maxIntentos) {
             await delay(delayTime);
           } else {
-            // Último intento fallido, activar fallback
             usarFallback = true;
           }
         } else {
           console.error("❌ Error no recuperable:", error.message);
-          // En caso de error no recuperable, también usar fallback
           usarFallback = true;
           break;
         }
       }
     }
 
-    // 🆕 ACTIVAR FALLBACK si OpenAI falló
     if (!result || usarFallback) {
-      console.warn('⚠️ OpenAI no disponible. Usando resultados de respaldo...');
+      console.warn('⚠️ Usando resultados de respaldo...');
       const resultadosMock = generarResultadosMock(pieza, modelo);
       
       return res.status(200).json({
@@ -149,14 +159,12 @@ Formato exacto:
         count: resultadosMock.length,
         stores: { mercadolibre: 0, yapo: 0, ia: resultadosMock.length },
         results: resultadosMock,
-        fallback: true, // Indicador de que son resultados de respaldo
-        message: 'Resultados aproximados. El servicio de IA está temporalmente saturado.'
+        fallback: true,
+        message: 'Resultados aproximados (Búsqueda IA no disponible).'
       });
     }
 
     let text = result;
-    console.log("🤖 Respuesta IA recibida");
-
     text = text.replace(/```json/g, "").replace(/```/g, "").trim();
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (jsonMatch) text = jsonMatch[0];
@@ -170,34 +178,34 @@ Formato exacto:
         const tiendaOriginal = r.tienda || "Tienda Web";
         let tiendaValida = "Otros";
         const tLower = tiendaOriginal.toLowerCase();
-        if (tLower.includes("mercado") || tLower.includes("mercadolibre")) tiendaValida = "MercadoLibre";
+        
+        if (tLower.includes("mercado")) tiendaValida = "MercadoLibre";
         else if (tLower.includes("yapo")) tiendaValida = "Yapo";
         else if (tLower.includes("autopartners")) tiendaValida = "AutoPartners";
+
+        // 🟢 CORRECCIÓN: Sobrescribimos la URL inventada con una URL de búsqueda real
+        const urlReal = generarUrlBusqueda(tiendaValida, pieza, modelo);
 
         return {
           ...r,
           id: r.id || `ia-${Date.now()}-${i}`,
           fechaScraped: new Date(),
           tienda: tiendaValida,
+          url: urlReal, // Usamos la URL generada programáticamente
           precio: typeof r.precio === 'string' ? parseInt(r.precio.replace(/\D/g, '')) || 0 : r.precio,
-          imagen: r.imagen || "https://placehold.co/300x300?text=No+Image"
+          imagen: r.imagen || "https://placehold.co/300x300?text=Repuesto"
         };
       });
 
     } catch (e) {
       console.error("❌ Error parseando JSON. Usando fallback...");
       const resultadosMock = generarResultadosMock(pieza, modelo);
-      
       return res.status(200).json({
         success: true,
-        count: resultadosMock.length,
-        stores: { mercadolibre: 0, yapo: 0, ia: resultadosMock.length },
         results: resultadosMock,
         fallback: true,
       });
     }
-
-    console.log(`✅ IA encontró ${resultados.length} productos.`);
 
     return res.status(200).json({
       success: true,
@@ -209,24 +217,15 @@ Formato exacto:
 
   } catch (error: any) {
     console.error('❌ Error API Handler:', error.message);
-
-    // En caso de error fatal, devolver resultados de respaldo
     const { pieza, modelo } = req.method === 'POST' ? req.body : req.query;
     if (pieza && modelo) {
       const resultadosMock = generarResultadosMock(pieza, modelo);
       return res.status(200).json({
         success: true,
-        count: resultadosMock.length,
-        stores: { mercadolibre: 0, yapo: 0, ia: resultadosMock.length },
         results: resultadosMock,
-        fallback: true,
-        message: 'Servicio temporalmente limitado. Mostrando resultados aproximados.'
+        fallback: true
       });
     }
-
-    return res.status(500).json({ 
-      error: error.message || 'Error interno', 
-      success: false 
-    });
+    return res.status(500).json({ error: error.message, success: false });
   }
 }
